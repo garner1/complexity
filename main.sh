@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+# bamfile=$1
+tsvfile=$1			# the compressed tsv file from umi_dedup group. Be aware that, because of soft clipping, reads that are duplicates are not aggregated. For this reason we also group by UMI bc! 
+extension=$2			# how many times the size of the initial sample you want to sequence now
+step=$3				# step size on the x-axis of the accumulation plot
+sd_samples=$4			# number of samples for the smoothing distro
+quality=30
+
+# parallel "/usr/local/share/anaconda3/bin/umi_tools group -I ${bamfile} --paired --group-out=grouped.{}.tsv --log=grouped.{}.log --mapping-quality=${quality} --umi-separator=: --chrom {}" ::: `seq 22` X Y
+
+zcat $tsvfile | tail -n+2 | cut -f7 | LC_ALL=C uniq -c | awk '{print $1}' | LC_ALL=C sort -n | LC_ALL=C uniq -c | awk '{print $1"\t"$2}' | LC_ALL=C sort -k2,2 > phi_i.tsv
+max=$(cat phi_i.tsv | /usr/local/share/anaconda3/bin/datamash max 2)
+seq $max | LC_ALL=C sort > all_i.tsv
+join -v 2 -1 2 -2 1 phi_i.tsv all_i.tsv | awk '{print 0"\t"$1}' > phi_missingI.tsv
+cat phi_i.tsv phi_missingI.tsv | LC_ALL=C sort -k2,2n | cut -f1 > prevalences.tsv # INTEGRATE WITH THE FULL LIST OF COUNTS FOR I
+
+n=$(zcat $tsvfile | tail -n+2 | cut -f7 | LC_ALL=C uniq -c | awk '{print $1}' | /usr/local/share/anaconda3/bin/datamash -H sum 1 | grep -v sum)	# the number of samples for the initial experiment: THE SUM OF THE DUPLICATES
+t=$(echo $n | awk '{print int(log($1)/log(10))}') # t defined as the floor of the natural log of n: SET THE MAXIMUM FOLD-CHANGE FOR THE ACCUMULATION CURVE
+t=$extension
+python runSGT.py $n $t $sd_samples $step # THE OUTPUT IS accumulatation_curve.tsv
+
+cat accumulation_curve.tsv | tr -d '(' | tr -d ')' | tr -d ' ' |tr ',' '\t' | awk -v offset=$n '{print $1"\t"offset+offset*$1"\t"$2}' > aux && mv aux accumulation_curve.tsv
+
+cat accumulation_curve.tsv | gnuplot -p -e "set term pdf;set output 'accumulation-curve.pdf';set title 'accumulation curve';set xlabel 'number of reads';set ylabel 'complexity' ;plot '/dev/stdin' u 2:3"
+xpdf accumulation-curve.pdf
+# rm phi_i.tsv all_i.tsv phi_missingI.tsv prevalences.tsv # cleaning
